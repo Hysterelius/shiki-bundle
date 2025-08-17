@@ -1,0 +1,76 @@
+name: Release on Shiki update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pnpm-lock.yaml"   # only trigger when dependencies change
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # so we can see all tags
+
+
+
+      - name: Extract Shiki version from lockfile
+        id: shiki
+        run: |
+          SHIKI_VERSION=$(grep -A1 'shiki@' pnpm-lock.yaml | head -n2 | tail -n1 | sed 's/.*://;s/ //g')
+          echo "shiki_version=$SHIKI_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Get latest release tag
+        id: current
+        run: |
+          CURRENT=$(git tag --list "v*" --sort=-version:refname | head -n1 | sed 's/^v//')
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+
+      - name: Check if new Shiki version
+        id: check
+        run: |
+          if [ "${{ steps.shiki.outputs.shiki_version }}" = "${{ steps.current.outputs.current }}" ]; then
+            echo "no_new=true" >> $GITHUB_OUTPUT
+          else
+            echo "no_new=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if no new version
+        if: steps.check.outputs.no_new == 'true'
+        run: echo "No new Shiki version, skipping release." && exit 0
+
+      - name: Setup Node + pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build bundle
+        run: pnpm build:rolldown
+
+      - name: Tag commit
+        run: |
+          VERSION=${{ steps.shiki.outputs.shiki_version }}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag v$VERSION
+          git push origin v$VERSION
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.shiki.outputs.shiki_version }}
+          name: Release v${{ steps.shiki.outputs.shiki_version }}
+          files: |
+            bundle.js
